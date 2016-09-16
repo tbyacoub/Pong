@@ -2,32 +2,103 @@ package com.tbyacoub.controller;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.net.Socket;
 
 import com.tbyacoub.model.GameModel;
 import com.tbyacoub.view.ServerView;
 
 public class ServerController {
-	
+
 	private ServerSocket serverSocket;
-	
+	private Socket clientSocket;
+	private Socket[] clients;
+
 	private ServerView serverView;
 	private GameModel gameModel;
 
 	public ServerController(ServerView serverView, GameModel gameModel) {
 		this.serverView = serverView;
 		this.gameModel = gameModel;
+		this.clients = new Socket[2];
 	}
-	
 
-	public void runServer(int port) throws InterruptedException {
+	public void runServer(int port) {
+		createSocket(port);
+		waitForConn();
+
+	}
+
+	private void createSocket(int port) {
 		try {
 			serverView.setServerStatus("Starting server at port" + port);
-			Thread.sleep(2000);
 			serverSocket = new ServerSocket(port);
 			serverView.setServerStatus("Server running at port " + port);
-			serverView.setGameStatus("Waiting for players to connect...");
+
 		} catch (IOException e) {
 			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * A loop that waits for clients to connect to the game server.
+	 */
+	private void waitForConn() {
+		while (true) {
+			try {
+				clientSocket = serverSocket.accept(); // Socket that connects
+														// client and server.
+				addToClients(clientSocket);
+				notifyClient(clientSocket);
+				if (clientsReady()) {
+					// Run Game
+					runGame();
+				}
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	/**
+	 * Adds client to the list of clients.
+	 * 
+	 * @param clientSocket
+	 *            Client's socket
+	 */
+	private void addToClients(Socket clientSocket) {
+		for (int i = 0; i < clients.length; i++) {
+			if (clients[i] == null) {
+				clients[i] = clientSocket;
+			}
+		}
+	}
+
+	/**
+	 * Notifies the client of the connection status.
+	 * 
+	 * @param clientSocket
+	 *            Client to be notified.
+	 */
+	private void notifyClient(Socket clientSocket) {
+		// TODO Auto-generated method stub
+
+	}
+
+	/**
+	 * Checks if both client are connected.
+	 * 
+	 * @return true if two clients are connected, false otherwise.
+	 */
+	private boolean clientsReady() {
+		return clients[0] != null && clients[1] != null;
+	}
+
+	/**
+	 * Runs the game loop.
+	 */
+	private void runGame() {
+		while (true) {
+
 		}
 	}
 
