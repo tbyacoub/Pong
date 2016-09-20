@@ -1,20 +1,27 @@
 package com.tbyacoub.controller;
 
 import java.io.IOException;
+import java.net.BindException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
 
 import com.tbyacoub.model.GameModel;
 import com.tbyacoub.view.ServerView;
 
-public class ServerController {
+public class ServerController implements Runnable {
 
 	private ServerSocket serverSocket;
-	private Socket clientSocket;
-	private Socket[] clients;
 
 	private ServerView serverView;
 	private GameModel gameModel;
+
+	private Thread monitorRequests;
+	private Thread monitorClients;
+	private Thread serverThread;
+
+	private ArrayList<Socket> clients;
+	protected volatile boolean clientAdded = false;
 
 	/**
 	 * Initialize the serverController.
@@ -27,19 +34,30 @@ public class ServerController {
 	public ServerController(ServerView serverView, GameModel gameModel) {
 		this.serverView = serverView;
 		this.gameModel = gameModel;
-		this.clients = new Socket[2];
+		clients = new ArrayList<>();
+	}
+
+	private void notifyViewOfCount() {
+		serverView.setGameStatus(clients.size() + " Players connected...");
 	}
 
 	/**
-	 * Runs the server.
+	 * Creates the server.
 	 * 
 	 * @param port
 	 *            binding port for server socket.
+	 * @throws BindException
+	 *             Another Server is running on the same port.
+	 * @throws InterruptedException
 	 */
-	public void runServer(int port) {
+	public void init(int port) throws BindException, InterruptedException {
 		createSocket(port);
-		waitForConn();
-
+		monitorClients = new Thread(new MonitorClients(this));
+		monitorClients.start();
+		monitorRequests = new Thread(new MonitorRequests(this, serverSocket));
+		monitorRequests.start();
+		serverThread = new Thread(this);
+		serverThread.start();
 	}
 
 	/**
@@ -48,7 +66,7 @@ public class ServerController {
 	 * @param port
 	 *            Port for socket to bind to.
 	 */
-	private void createSocket(int port) {
+	private void createSocket(int port) throws BindException {
 		try {
 			serverView.setServerStatus("Starting server at port" + port);
 			serverSocket = new ServerSocket(port);
@@ -59,87 +77,39 @@ public class ServerController {
 		}
 	}
 
-	/**
-	 * A loop that waits for clients to connect to the game server.
-	 */
-	private void waitForConn() {
-		while (true) {
+	protected synchronized ArrayList<Socket> getClients() {
+		return clients;
+	}
+
+	protected synchronized void addClient(Socket clientSocket) {
+		if (clients.size() <= 2) {
+			clients.add(clientSocket);
+			clientAdded = true;
+			notifyViewOfCount();
+		}
+	}
+
+	protected synchronized void deleteClient(Socket clientSocket) {
+		clients.remove(clientSocket);
+		notifyViewOfCount();
+	}
+
+	private boolean ready() {
+		while (clients.size() < 2) {
+			System.out.println("Waiting for players to connect...");
 			try {
-				clientSocket = serverSocket.accept();
-				addToClients(clientSocket);
-				notifyClient(clientSocket);
-				notifyServer();
-				if (clientsReady()) {
-					// Run Game
-					runGame();
-				}
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
-	}
-
-	/**
-	 * Adds client to the list of clients.
-	 * 
-	 * @param clientSocket
-	 *            Client's socket
-	 */
-	private void addToClients(Socket clientSocket) {
-		if (clients[0] == null) {
-			clients[0] = clientSocket;
-		} else if (clients[1] == null) {
-			clients[1] = clientSocket;
-		}
-	}
-
-	/**
-	 * Notifies the client of the connection status.
-	 * 
-	 * @param clientSocket
-	 *            Client to be notified.
-	 */
-	private void notifyClient(Socket clientSocket) {
-		// TODO Auto-generated method stub
-
-	}
-
-	/**
-	 * Checks if both client are connected.
-	 * 
-	 * @return true if two clients are connected, false otherwise.
-	 */
-	private boolean clientsReady() {
-		return (clients[0] != null && clients[1] != null);
-	}
-
-	/**
-	 * Notifies server about clients status.
-	 */
-	private void notifyServer() {
-		serverView.setGameStatus(numberOfClients() + " players connected...");
-	}
-
-	private int numberOfClients(){
-		int count = 0;
-		for (int i = 0; i < clients.length; i++) {
-			if (clients[i] != null){
-				count++;
-			}
-		}
-		return count;
-	}
-	/**
-	 * Runs the game loop.
-	 */
-	private void runGame() {
-		while (true) {
-			System.out.println("Game running");
-			try {
-				Thread.sleep(2000);
+				Thread.sleep(4000);
 			} catch (InterruptedException e) {
-				e.printStackTrace();
+				return false;
 			}
+		}
+		return true;
+	}
+
+	@Override
+	public void run() {
+		while (ready() && gameModel.continueGame()) {
+			System.out.println("game running...");
 		}
 	}
 
