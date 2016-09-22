@@ -1,40 +1,36 @@
 package com.tbyacoub.view;
 
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
-import java.awt.event.WindowListener;
-
 import javax.swing.JFrame;
 
-public class PongView extends JFrame{
+public class PongView extends JFrame {
 
 	/**
 	 * 
 	 */
 	private static final long serialVersionUID = 5522123021498546893L;
-	
-	private PongStatus pongStatus = new PongStatus();
+
+	private PongPanel pongPanel = new PongPanel();
 
 	public PongView() {
-		setLayout(new BorderLayout());
-		setBackground(Color.BLACK);
+		setDefaultCloseOperation(EXIT_ON_CLOSE);
 		setResizable(false);
-		setSize(600, 600);
 		setTitle("Pong");
-		
-		add(pongStatus, BorderLayout.NORTH);
-		addWindowListener(new WindowAdapter() {
-			public void windowClosing(WindowEvent we) {
-				System.out.println(1);
-			  }
-		});
-	}
-	
-	public void setStatusOnPongStatus(String string) {
-		pongStatus.setStatus(string);
+		add(pongPanel);
 	}
 
-	
+	public int getHeight() {
+		return pongPanel.getHeight();
+	}
+
+	public int getWidth() {
+		return pongPanel.getWidth();
+	}
+
+	public void render(int p1x, int p1y, int p1w, int p1h, int p2x, int p2y, int p2w, int p2h, int bx, int by, int bd) {
+		pongPanel.render(p1x, p1y, p1w, p1h, p2x, p2y, p2w, p2h, bx, by, bd);
+	}
+
+	public void render(int p1x, int p1y, int p1w, int p1h) {
+		pongPanel.render(p1x, p1y, p1w, p1h);
+	}
 }

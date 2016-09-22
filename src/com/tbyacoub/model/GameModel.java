@@ -16,6 +16,6 @@ public class GameModel {
 	}
 	
 	public boolean continueGame(){
-		return !(playerOneScore == 5 || playerTwoScore == 5);
+		return !(playerOneScore == scoreLimit || playerTwoScore == scoreLimit);
 	}
 }

@@ -1,27 +1,45 @@
 package com.tbyacoub.controller;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.net.BindException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.ArrayList;
+import java.util.Timer;
 
 import com.tbyacoub.model.GameModel;
+import com.tbyacoub.model.PongBall;
+import com.tbyacoub.model.PongPaddle;
 import com.tbyacoub.view.ServerView;
 
-public class ServerController implements Runnable {
+public class ServerController {
+
+	private java.util.Timer timer;
+
+	private int playerID;
 
 	private ServerSocket serverSocket;
 
 	private ServerView serverView;
 	private GameModel gameModel;
+	private PongBall pongBall;
 
-	private Thread monitorRequests;
-	private Thread monitorClients;
-	private Thread serverThread;
+	private MonitorRequests monitorRequests;
+	private MonitorClients monitorClients;
+	private Thread monitorRequestsThread;
+	private Thread monitorClientsThread;
 
 	private ArrayList<Socket> clients;
-	protected volatile boolean clientAdded = false;
+
+	protected int panelHeight;
+	protected int height;
+	protected int widht;
 
 	/**
 	 * Initialize the serverController.
@@ -30,11 +48,18 @@ public class ServerController implements Runnable {
 	 *            Server GUI instance.
 	 * @param gameModel
 	 *            Game model.
+	 * @param pongBall
+	 * @param height2
+	 * @param width2
 	 */
-	public ServerController(ServerView serverView, GameModel gameModel) {
+	public ServerController(ServerView serverView, GameModel gameModel, PongBall pongBall, int width, int height) {
+		this.clients = new ArrayList<>();
 		this.serverView = serverView;
 		this.gameModel = gameModel;
-		clients = new ArrayList<>();
+		this.pongBall = pongBall;
+		this.height = height;
+		this.widht = width;
+
 	}
 
 	private void notifyViewOfCount() {
@@ -50,14 +75,14 @@ public class ServerController implements Runnable {
 	 *             Another Server is running on the same port.
 	 * @throws InterruptedException
 	 */
-	public void init(int port) throws BindException, InterruptedException {
+	public void init(int port) throws BindException, IOException {
 		createSocket(port);
-		monitorClients = new Thread(new MonitorClients(this));
-		monitorClients.start();
-		monitorRequests = new Thread(new MonitorRequests(this, serverSocket));
-		monitorRequests.start();
-		serverThread = new Thread(this);
-		serverThread.start();
+		monitorRequests = new MonitorRequests(this, serverSocket);
+		monitorClients = new MonitorClients(this);
+		monitorClientsThread = new Thread(monitorClients);
+		monitorClientsThread.start();
+		monitorRequestsThread = new Thread(monitorRequests);
+		monitorRequestsThread.start();
 	}
 
 	/**
@@ -66,51 +91,92 @@ public class ServerController implements Runnable {
 	 * @param port
 	 *            Port for socket to bind to.
 	 */
-	private void createSocket(int port) throws BindException {
-		try {
-			serverView.setServerStatus("Starting server at port" + port);
-			serverSocket = new ServerSocket(port);
-			serverView.setServerStatus("Server running at port " + port);
-			serverView.setGameStatus("No players connected...");
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+	private void createSocket(int port) throws BindException, IOException {
+		serverView.setServerStatus("Starting server at port" + port);
+		serverSocket = new ServerSocket(port);
+		serverView.setServerStatus("Server running at port " + port);
+		serverView.setGameStatus("No players connected...");
 	}
 
 	protected synchronized ArrayList<Socket> getClients() {
 		return clients;
 	}
 
-	protected synchronized void addClient(Socket clientSocket) {
-		if (clients.size() <= 2) {
-			clients.add(clientSocket);
-			clientAdded = true;
-			notifyViewOfCount();
+	protected void addClient(Socket clientSocket) {
+		clients.add(clientSocket);
+		notifyViewOfCount();
+		if (clients.size() == 2) {
+			monitorRequests.suspend();
+			monitorClients.suspend();
+			timer = new Timer();
+			timer.schedule(new GameLoop(), 0, 1000 / 60);
 		}
 	}
 
-	protected synchronized void deleteClient(Socket clientSocket) {
-		clients.remove(clientSocket);
-		notifyViewOfCount();
+	public synchronized void deleteClient(int id) {
+		try {
+			clients.remove(id).close();
+			notifyViewOfCount();
+			if (monitorClients.isSuspended()) {
+				monitorClients.resume();
+			}
+			if (monitorRequests.isSuspended()) {
+				monitorRequests.resume();
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 	}
 
-	private boolean ready() {
-		while (clients.size() < 2) {
-			System.out.println("Waiting for players to connect...");
+	private class GameLoop extends java.util.TimerTask {
+
+		private ObjectOutputStream streamOut;
+		private ObjectInputStream streamIn;
+
+		private PongPaddle[] paddles = new PongPaddle[2];
+
+		@Override
+		public void run() {
 			try {
-				Thread.sleep(4000);
-			} catch (InterruptedException e) {
-				return false;
+				updateGame();
+				render();
+			} catch (ClassNotFoundException e) {
+			} catch (SocketException | EOFException sc) {
+				timer.cancel();
+				deleteClient(playerID);
+			} catch (IOException e) {
+				e.printStackTrace();
+				timer.cancel();
+			}
+
+			if (!gameModel.continueGame())
+				timer.cancel();
+		}
+
+		private void updateGame() throws IOException, ClassNotFoundException {
+			for (playerID = 0; playerID < clients.size(); playerID++) {
+				streamOut = new ObjectOutputStream(new BufferedOutputStream(clients.get(playerID).getOutputStream()));
+				streamOut.writeChar('p');
+				streamOut.flush();
+				streamIn = new ObjectInputStream(new BufferedInputStream(clients.get(playerID).getInputStream()));
+				// SocketException when player is disconnected
+				PongPaddle pongPaddle = (PongPaddle) streamIn.readObject();
+				paddles[playerID] = pongPaddle;
+			}
+			pongBall.step(paddles[0], paddles[1], panelHeight);
+
+		}
+
+		private void render() throws IOException {
+			for (playerID = 0; playerID < clients.size(); playerID++) {
+				streamOut = new ObjectOutputStream(new BufferedOutputStream(clients.get(playerID).getOutputStream()));
+				streamOut.writeChar('r');
+				streamOut.writeObject(paddles[(playerID + 1) % 2]);
+				streamOut.writeObject(pongBall);
+				streamOut.flush();
 			}
 		}
-		return true;
-	}
 
-	@Override
-	public void run() {
-		while (ready() && gameModel.continueGame()) {
-			System.out.println("game running...");
-		}
 	}
 
 }
