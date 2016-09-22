@@ -1,20 +1,45 @@
 package com.tbyacoub.controller;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.net.BindException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+import java.util.ArrayList;
+import java.util.Timer;
 
 import com.tbyacoub.model.GameModel;
+import com.tbyacoub.model.PongBall;
+import com.tbyacoub.model.PongPaddle;
 import com.tbyacoub.view.ServerView;
 
 public class ServerController {
 
+	private java.util.Timer timer;
+
+	private int playerID;
+
 	private ServerSocket serverSocket;
-	private Socket clientSocket;
-	private Socket[] clients;
 
 	private ServerView serverView;
 	private GameModel gameModel;
+	private PongBall pongBall;
+
+	private MonitorRequests monitorRequests;
+	private MonitorClients monitorClients;
+	private Thread monitorRequestsThread;
+	private Thread monitorClientsThread;
+
+	private ArrayList<Socket> clients;
+
+	protected int panelHeight;
+	protected int height;
+	protected int widht;
 
 	/**
 	 * Initialize the serverController.
@@ -23,23 +48,41 @@ public class ServerController {
 	 *            Server GUI instance.
 	 * @param gameModel
 	 *            Game model.
+	 * @param pongBall
+	 * @param height2
+	 * @param width2
 	 */
-	public ServerController(ServerView serverView, GameModel gameModel) {
+	public ServerController(ServerView serverView, GameModel gameModel, PongBall pongBall, int width, int height) {
+		this.clients = new ArrayList<>();
 		this.serverView = serverView;
 		this.gameModel = gameModel;
-		this.clients = new Socket[2];
+		this.pongBall = pongBall;
+		this.height = height;
+		this.widht = width;
+
+	}
+
+	private void notifyViewOfCount() {
+		serverView.setGameStatus(clients.size() + " Players connected...");
 	}
 
 	/**
-	 * Runs the server.
+	 * Creates the server.
 	 * 
 	 * @param port
 	 *            binding port for server socket.
+	 * @throws BindException
+	 *             Another Server is running on the same port.
+	 * @throws InterruptedException
 	 */
-	public void runServer(int port) {
+	public void init(int port) throws BindException, IOException {
 		createSocket(port);
-		waitForConn();
-
+		monitorRequests = new MonitorRequests(this, serverSocket);
+		monitorClients = new MonitorClients(this);
+		monitorClientsThread = new Thread(monitorClients);
+		monitorClientsThread.start();
+		monitorRequestsThread = new Thread(monitorRequests);
+		monitorRequestsThread.start();
 	}
 
 	/**
@@ -48,99 +91,92 @@ public class ServerController {
 	 * @param port
 	 *            Port for socket to bind to.
 	 */
-	private void createSocket(int port) {
+	private void createSocket(int port) throws BindException, IOException {
+		serverView.setServerStatus("Starting server at port" + port);
+		serverSocket = new ServerSocket(port);
+		serverView.setServerStatus("Server running at port " + port);
+		serverView.setGameStatus("No players connected...");
+	}
+
+	protected synchronized ArrayList<Socket> getClients() {
+		return clients;
+	}
+
+	protected void addClient(Socket clientSocket) {
+		clients.add(clientSocket);
+		notifyViewOfCount();
+		if (clients.size() == 2) {
+			monitorRequests.suspend();
+			monitorClients.suspend();
+			timer = new Timer();
+			timer.schedule(new GameLoop(), 0, 1000 / 60);
+		}
+	}
+
+	public synchronized void deleteClient(int id) {
 		try {
-			serverView.setServerStatus("Starting server at port" + port);
-			serverSocket = new ServerSocket(port);
-			serverView.setServerStatus("Server running at port " + port);
-			serverView.setGameStatus("No players connected...");
+			clients.remove(id).close();
+			notifyViewOfCount();
+			if (monitorClients.isSuspended()) {
+				monitorClients.resume();
+			}
+			if (monitorRequests.isSuspended()) {
+				monitorRequests.resume();
+			}
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 	}
 
-	/**
-	 * A loop that waits for clients to connect to the game server.
-	 */
-	private void waitForConn() {
-		while (true) {
+	private class GameLoop extends java.util.TimerTask {
+
+		private ObjectOutputStream streamOut;
+		private ObjectInputStream streamIn;
+
+		private PongPaddle[] paddles = new PongPaddle[2];
+
+		@Override
+		public void run() {
 			try {
-				clientSocket = serverSocket.accept();
-				addToClients(clientSocket);
-				notifyClient(clientSocket);
-				notifyServer();
-				if (clientsReady()) {
-					// Run Game
-					runGame();
-				}
+				updateGame();
+				render();
+			} catch (ClassNotFoundException e) {
+			} catch (SocketException | EOFException sc) {
+				timer.cancel();
+				deleteClient(playerID);
 			} catch (IOException e) {
 				e.printStackTrace();
+				timer.cancel();
+			}
+
+			if (!gameModel.continueGame())
+				timer.cancel();
+		}
+
+		private void updateGame() throws IOException, ClassNotFoundException {
+			for (playerID = 0; playerID < clients.size(); playerID++) {
+				streamOut = new ObjectOutputStream(new BufferedOutputStream(clients.get(playerID).getOutputStream()));
+				streamOut.writeChar('p');
+				streamOut.flush();
+				streamIn = new ObjectInputStream(new BufferedInputStream(clients.get(playerID).getInputStream()));
+				// SocketException when player is disconnected
+				PongPaddle pongPaddle = (PongPaddle) streamIn.readObject();
+				paddles[playerID] = pongPaddle;
+			}
+			pongBall.step(paddles[0], paddles[1], panelHeight);
+
+		}
+
+		private void render() throws IOException {
+			for (playerID = 0; playerID < clients.size(); playerID++) {
+				streamOut = new ObjectOutputStream(new BufferedOutputStream(clients.get(playerID).getOutputStream()));
+				streamOut.writeChar('r');
+				streamOut.writeObject(paddles[(playerID + 1) % 2]);
+				streamOut.writeObject(pongBall);
+				streamOut.flush();
 			}
 		}
-	}
 
-	/**
-	 * Adds client to the list of clients.
-	 * 
-	 * @param clientSocket
-	 *            Client's socket
-	 */
-	private void addToClients(Socket clientSocket) {
-		if (clients[0] == null) {
-			clients[0] = clientSocket;
-		} else if (clients[1] == null) {
-			clients[1] = clientSocket;
-		}
-	}
-
-	/**
-	 * Notifies the client of the connection status.
-	 * 
-	 * @param clientSocket
-	 *            Client to be notified.
-	 */
-	private void notifyClient(Socket clientSocket) {
-		// TODO Auto-generated method stub
-
-	}
-
-	/**
-	 * Checks if both client are connected.
-	 * 
-	 * @return true if two clients are connected, false otherwise.
-	 */
-	private boolean clientsReady() {
-		return (clients[0] != null && clients[1] != null);
-	}
-
-	/**
-	 * Notifies server about clients status.
-	 */
-	private void notifyServer() {
-		serverView.setGameStatus(numberOfClients() + " players connected...");
-	}
-
-	private int numberOfClients(){
-		int count = 0;
-		for (int i = 0; i < clients.length; i++) {
-			if (clients[i] != null){
-				count++;
-			}
-		}
-		return count;
-	}
-	/**
-	 * Runs the game loop.
-	 */
-	private void runGame() {
-		while (true) {
-			System.out.println("Game running");
-			try {
-				Thread.sleep(2000);
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
-		}
 	}
 
 }
